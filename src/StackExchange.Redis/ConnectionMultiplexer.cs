@@ -55,6 +55,9 @@ namespace StackExchange.Redis
         internal EndPointCollection EndPoints { get; }
         internal ConfigurationOptions RawConfig { get; }
 
+        /// <summary>Whether the tunnel asks for commands to complete on its transports' threads.</summary>
+        internal bool CompletesInline { get; }
+
         /// <summary>
         /// When this multiplexer is a member of a connection group, the group resolves the effective
         /// circuit-breaker (member override, else this member's own configuration, else the group default)
@@ -163,6 +166,7 @@ namespace StackExchange.Redis
 
             GroupCircuitBreaker = groupCircuitBreaker;
             RawConfig = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            CompletesInline = configuration.Tunnel is { CompletesInline: true };
             EndPoints = endpoints ?? RawConfig.EndPoints.Clone();
             EndPoints.SetDefaultPorts(serverType, ssl: RawConfig.Ssl);
             Logger = configuration.LoggerFactory?.CreateLogger<ConnectionMultiplexer>();
@@ -2804,7 +2808,7 @@ namespace StackExchange.Redis
             IResultBox<T>? source = null;
             if (!message.IsFireAndForget)
             {
-                source = TaskResultBox<T>.Create(out tcs, state);
+                source = TaskResultBox<T>.Create(out tcs, state, CompletesInline);
             }
             var write = TryPushMessageToBridgeAsync(message, processor, source, ref server);
             if (!write.IsCompletedSuccessfully)
@@ -2855,7 +2859,7 @@ namespace StackExchange.Redis
             IResultBox<T?>? source = null;
             if (!message.IsFireAndForget)
             {
-                source = TaskResultBox<T?>.Create(out tcs, state);
+                source = TaskResultBox<T?>.Create(out tcs, state, CompletesInline);
             }
             var write = TryPushMessageToBridgeAsync(message, processor, source!, ref server);
             if (!write.IsCompletedSuccessfully)

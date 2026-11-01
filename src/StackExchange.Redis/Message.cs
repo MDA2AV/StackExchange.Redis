@@ -583,8 +583,12 @@ namespace StackExchange.Redis
             if (currBox is not null)
             {
                 connection?.ObserveMessageResult(currBox.Fault);
+                if (currBox.CompletesInline && connection is not null && connection.TryDeferCompletion(currBox))
+                {
+                    return; // the transport completes it on its own thread, once the delivery is parsed
+                }
+                currBox.ActivateContinuations();
             }
-            currBox?.ActivateContinuations();
         }
 
         internal bool ResultBoxIsAsync => Volatile.Read(ref resultBox)?.IsAsync == true;

@@ -1,1 +1,2 @@
 ﻿#nullable enable
+[SER009]virtual StackExchange.Redis.Configuration.Tunnel.CompletesInline.get -> bool

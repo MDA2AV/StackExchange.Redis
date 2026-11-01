@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,40 @@ namespace StackExchange.Redis
         private bool _transportAdopted;
 
         internal bool HasTransport => _transport is not null;
+
+        // The transport connection whose delivery is being parsed on this thread: what that parse completes, for a
+        // tunnel whose commands complete inline, waits in _inlineCompletions until the delivery is parsed.
+        [ThreadStatic]
+        private static PhysicalConnection? t_delivering;
+
+        private List<IResultBox>? _inlineCompletions;
+
+        /// <summary>
+        /// Defers completing <paramref name="box"/> to the end of the delivery being parsed on this thread, when that
+        /// delivery is this connection's; false otherwise, and the caller completes it as usual.
+        /// </summary>
+        internal bool TryDeferCompletion(IResultBox box)
+        {
+            if (t_delivering != this) return false;
+            (_inlineCompletions ??= new List<IResultBox>()).Add(box);
+            return true;
+        }
+
+        private void CompleteDeferred()
+        {
+            while (_inlineCompletions is { Count: > 0 } boxes)
+            {
+                // Taken out before any completes: the code awaiting a box runs here, and may send a command whose
+                // reply a transport delivers before that code returns, which defers into a list of its own.
+                _inlineCompletions = null;
+                foreach (var box in boxes)
+                {
+                    box.ActivateInline();
+                }
+                boxes.Clear();
+                _inlineCompletions ??= boxes;
+            }
+        }
 
         private void InitTransportOutput(DuplexTransport transport)
         {
@@ -120,6 +155,8 @@ namespace StackExchange.Redis
             public override bool OnReceived(ReadOnlySpan<byte> payload)
             {
                 var conn = connection;
+                var outer = t_delivering;
+                t_delivering = conn;
                 try
                 {
                     while (!payload.IsEmpty)
@@ -143,6 +180,11 @@ namespace StackExchange.Redis
                     conn._readStatus = ReadStatus.Faulted;
                     conn.RecordConnectionFailed(ConnectionFailureType.InternalFailure, ex);
                     return false;
+                }
+                finally
+                {
+                    t_delivering = outer;
+                    conn.CompleteDeferred();
                 }
             }
 

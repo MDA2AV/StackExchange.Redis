@@ -60,6 +60,21 @@ namespace StackExchange.Redis.Configuration
         [Experimental(RESPite.Experiments.Transport, UrlFormat = RESPite.Experiments.UrlFormat)]
         public virtual ValueTask<RESPite.Transports.DuplexTransport?> ConnectTransportAsync(EndPoint endpoint, ConnectionType connectionType, TlsOptions tls, CancellationToken cancellationToken) => default;
 
+        /// <summary>
+        /// Whether an awaited command whose reply arrives through a <see cref="RESPite.Transports.DuplexTransport"/>
+        /// from this tunnel completes on the transport's own thread: the code awaiting it runs there, once the
+        /// delivered bytes have been parsed, rather than being dispatched to the thread pool.
+        /// </summary>
+        /// <remarks>
+        /// For event-loop transports whose callers live on the loop, where a dispatch to the thread pool sends the
+        /// caller away from the loop it has to come back to. The code awaiting a command then runs inside the
+        /// transport's delivery, so the transport must tolerate that, and that code must not block. A command
+        /// completed anywhere else (on a connection that is not a transport, by a timeout, by a connection failure)
+        /// still completes on the thread pool.
+        /// </remarks>
+        [Experimental(RESPite.Experiments.Transport, UrlFormat = RESPite.Experiments.UrlFormat)]
+        public virtual bool CompletesInline => false;
+
         private sealed class HttpProxyTunnel : Tunnel
         {
             public EndPoint Proxy { get; }

@@ -23,8 +23,17 @@ namespace StackExchange.Redis
         /// </remarks>
         bool IsCompleted { get; }
 
+        /// <summary>
+        /// Whether a transport that delivers this box's reply may complete it on its own thread, at the end of the
+        /// delivery (see <see cref="Configuration.Tunnel.CompletesInline"/>).
+        /// </summary>
+        bool CompletesInline { get; }
+
         void SetException(Exception ex);
         void ActivateContinuations();
+
+        /// <summary>Completes the box on the calling thread, so the code awaiting it runs here.</summary>
+        void ActivateInline();
         void Cancel();
     }
     internal interface IResultBox<T> : IResultBox
@@ -39,6 +48,7 @@ namespace StackExchange.Redis
         private volatile bool _completed;
 
         bool IResultBox.IsAsync => false;
+        bool IResultBox.CompletesInline => false;
         bool IResultBox.IsFaulted => _exception != null;
         bool IResultBox.IsCompleted => _completed;
         Exception? IResultBox.Fault => _exception;
@@ -56,6 +66,8 @@ namespace StackExchange.Redis
             }
             ConnectionMultiplexer.TraceWithoutContext("Pulsed", "Result");
         }
+
+        void IResultBox.ActivateInline() => ((IResultBox)this).ActivateContinuations();
 
         /// <summary>Clears the per-operation state so the box can be handed to another operation.</summary>
         protected void ResetForRecycle()
@@ -116,10 +128,14 @@ namespace StackExchange.Redis
         private volatile Exception? _exception;
         private T _value = default!;
 
-        private TaskResultBox(object? asyncState, TaskCreationOptions creationOptions) : base(asyncState, creationOptions)
-        { }
+        private readonly bool _completesInline;
+
+        private TaskResultBox(object? asyncState, TaskCreationOptions creationOptions, bool completesInline) : base(asyncState, creationOptions)
+            => _completesInline = completesInline;
 
         bool IResultBox.IsAsync => true;
+
+        bool IResultBox.CompletesInline => _completesInline;
 
         bool IResultBox.IsFaulted => _exception != null;
         bool IResultBox.IsCompleted => Task.IsCompleted;
@@ -147,6 +163,8 @@ namespace StackExchange.Redis
                 ActivateContinuationsImpl();
         }
 
+        void IResultBox.ActivateInline() => ActivateContinuationsImpl();
+
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA1816:Dispose methods should call SuppressFinalize", Justification = "Intentional observation")]
         private void ActivateContinuationsImpl()
         {
@@ -167,7 +185,7 @@ namespace StackExchange.Redis
             }
         }
 
-        public static IResultBox<T> Create(out TaskCompletionSource<T> source, object? asyncState)
+        public static IResultBox<T> Create(out TaskCompletionSource<T> source, object? asyncState, bool completesInline = false)
         {
             // it might look a little odd to return the same object as two different things,
             // but that's because it is serving two purposes, and I want to make it clear
@@ -176,8 +194,11 @@ namespace StackExchange.Redis
             // the code doesn't need to know about
             var obj = new TaskResultBox<T>(
                 asyncState,
-                // if we don't trust the TPL/sync-context, avoid a double QUWI dispatch
-                ConnectionMultiplexer.PreventThreadTheft ? TaskCreationOptions.None : TaskCreationOptions.RunContinuationsAsynchronously);
+                // if we don't trust the TPL/sync-context, avoid a double QUWI dispatch; a box a transport may complete
+                // inline (Tunnel.CompletesInline) cannot force its continuations off the completing thread, so completed
+                // anywhere else it goes through the thread pool the same way
+                completesInline || ConnectionMultiplexer.PreventThreadTheft ? TaskCreationOptions.None : TaskCreationOptions.RunContinuationsAsynchronously,
+                completesInline);
             source = obj;
             return obj;
         }
